@@ -461,27 +461,16 @@ pose.onResults(results => {
   skelCanvas.height = h;
 
   skelCtx.clearRect(0, 0, w, h);
-
-  // 映像を 78% に縮小して上下左右に余白を作り全身が収まりやすくする
-  const VIEW = 0.78;
-  const ox = w * (1 - VIEW) / 2;
-  const oy = h * (1 - VIEW) / 2;
-  skelCtx.save();
-  skelCtx.translate(ox, oy);
-  skelCtx.scale(VIEW, VIEW);
-
   skelCtx.drawImage(results.image, 0, 0, w, h);
 
   if (results.poseLandmarks && results.poseWorldLandmarks) {
     detectLabel.textContent = '検出中 ✓';
-    drawSkeleton(results.poseLandmarks, w, h); // transform 内なので座標も自動でズームアウト
+    drawSkeleton(results.poseLandmarks, w, h);
     worldLm = results.poseWorldLandmarks;
   } else {
     detectLabel.textContent = '未検出';
     worldLm = null;
   }
-
-  skelCtx.restore();
 });
 
 // ===== カメラ起動 =====
