@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>骨格検出デモ</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0d0d2b;
+    color: white;
+    font-family: sans-serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    overflow: hidden;
+  }
+
+  #header {
+    width: 100%;
+    padding: 10px 16px;
+    background: #16213e;
+    border-bottom: 3px solid #FFE66D;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+
+  #header h1 {
+    font-size: 1.2rem;
+    color: #FFE66D;
+  }
+
+  #status {
+    font-size: 0.85rem;
+    padding: 4px 12px;
+    border-radius: 20px;
+    background: #333;
+    color: #aaa;
+  }
+  #status.ready  { background: #14532d; color: #4ade80; }
+  #status.error  { background: #7f1d1d; color: #f87171; }
+
+  #canvas-wrap {
+    position: relative;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-height: 0;
+  }
+
+  /* 実際のカメラ映像（非表示・MediaPipeに渡すだけ） */
+  #input-video {
+    display: none;
+  }
+
+  /* カメラ映像 + 骨格を重ねて描画するキャンバス */
+  #output-canvas {
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: 12px;
+    border: 2px solid #2a2a5a;
+    /* カメラはミラー表示が自然なので左右反転 */
+    transform: scaleX(-1);
+  }
+
+  /* ローディングオーバーレイ */
+  #loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    background: rgba(13,13,43,0.85);
+    border-radius: 12px;
+  }
+
+  .spinner {
+    width: 48px; height: 48px;
+    border: 4px solid #2a2a5a;
+    border-top-color: #FFE66D;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  #loading p { color: #aaa; font-size: 0.9rem; }
+
+  /* 情報パネル */
+  #info-panel {
+    width: 100%;
+    padding: 8px 16px;
+    background: #16213e;
+    border-top: 1px solid #2a2a5a;
+    display: flex;
+    gap: 24px;
+    font-size: 0.8rem;
+    color: #888;
+    flex-shrink: 0;
+  }
+
+  #info-panel span { color: #FFE66D; font-weight: bold; }
+
+  /* ランドマーク凡例 */
+  #legend {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .legend-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+  }
+
+  /* カメラ許可エラー */
+  #cam-error {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: #f87171;
+    text-align: center;
+    padding: 24px;
+  }
+  #cam-error span { font-size: 3rem; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>🦴 骨格検出デモ（MediaPipe Pose）</h1>
+  <div id="status">読み込み中...</div>
+</div>
+
+<div id="canvas-wrap">
+  <video id="input-video" playsinline muted autoplay></video>
+  <canvas id="output-canvas"></canvas>
+
+  <div id="loading">
+    <div class="spinner"></div>
+    <p id="loading-text">MediaPipe を初期化中...</p>
+  </div>
+
+  <div id="cam-error">
+    <span>📷</span>
+    <p>カメラへのアクセスが拒否されました。<br>ブラウザの設定からカメラを許可してください。</p>
+  </div>
+</div>
+
+<div id="info-panel">
+  <div>検出: <span id="detect-label">—</span></div>
+  <div>FPS: <span id="fps-label">—</span></div>
+  <div id="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:#FF6B6B"></div>顔・体</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#4ECDC4"></div>左腕・足</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#FFE66D"></div>右腕・足</div>
+  </div>
+</div>
+
+<!-- MediaPipe CDN -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+
+<script>
+const video   = document.getElementById('input-video');
+const canvas  = document.getElementById('output-canvas');
+const ctx     = canvas.getContext('2d');
+const loading = document.getElementById('loading');
+const loadingText = document.getElementById('loading-text');
+const statusEl = document.getElementById('status');
+const detectLabel = document.getElementById('detect-label');
+const fpsLabel    = document.getElementById('fps-label');
+
+// FPS計測
+let lastTime = performance.now();
+let frameCount = 0;
+
+// ===== MediaPipe Pose 初期化 =====
+const pose = new Pose({
+  locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+});
+
+pose.setOptions({
+  modelComplexity: 1,        // 0=軽量, 1=標準, 2=高精度
+  smoothLandmarks: true,     // 時間方向に滑らかにする
+  enableSegmentation: false,
+  smoothSegmentation: false,
+  minDetectionConfidence: 0.5,
+  minTrackingConfidence: 0.5,
+});
+
+pose.onResults(onResults);
+
+// ===== 骨格描画コールバック =====
+function onResults(results) {
+  // キャンバスをカメラ映像サイズに合わせる
+  canvas.width  = results.image.width;
+  canvas.height = results.image.height;
+
+  // カメラ映像を描画
+  ctx.save();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+  if (results.poseLandmarks) {
+    detectLabel.textContent = '検出中 ✓';
+
+    // --- 接続線（骨） ---
+    // MediaPipe標準のdrawConnectorsを使うと色指定が一括なので
+    // 部位ごとに色分けして手動描画する
+    drawColoredSkeleton(results.poseLandmarks, canvas.width, canvas.height);
+
+    // --- 関節点 ---
+    drawLandmarkDots(results.poseLandmarks, canvas.width, canvas.height);
+
+  } else {
+    detectLabel.textContent = '未検出';
+  }
+
+  ctx.restore();
+
+  // FPS
+  frameCount++;
+  const now = performance.now();
+  if (now - lastTime >= 1000) {
+    fpsLabel.textContent = frameCount;
+    frameCount = 0;
+    lastTime = now;
+  }
+}
+
+// ===== 部位ごとの接続定義 =====
+// MediaPipe Pose のランドマーク番号:
+// 0=鼻, 1-10=顔, 11=左肩, 12=右肩, 13=左肘, 14=右肘,
+// 15=左手首, 16=右手首, 17-22=手の端,
+// 23=左腰, 24=右腰, 25=左膝, 26=右膝, 27=左足首, 28=右足首, 29-32=足の端
+
+const BODY_CONNECTIONS = [
+  // 体幹
+  { from: 11, to: 12, color: '#FF6B6B' },
+  { from: 11, to: 23, color: '#FF6B6B' },
+  { from: 12, to: 24, color: '#FF6B6B' },
+  { from: 23, to: 24, color: '#FF6B6B' },
+  // 左腕（画面右 = 実際の左）
+  { from: 11, to: 13, color: '#4ECDC4' },
+  { from: 13, to: 15, color: '#4ECDC4' },
+  { from: 15, to: 17, color: '#4ECDC4' },
+  { from: 15, to: 19, color: '#4ECDC4' },
+  { from: 15, to: 21, color: '#4ECDC4' },
+  // 右腕（画面左 = 実際の右）
+  { from: 12, to: 14, color: '#FFE66D' },
+  { from: 14, to: 16, color: '#FFE66D' },
+  { from: 16, to: 18, color: '#FFE66D' },
+  { from: 16, to: 20, color: '#FFE66D' },
+  { from: 16, to: 22, color: '#FFE66D' },
+  // 左脚
+  { from: 23, to: 25, color: '#4ECDC4' },
+  { from: 25, to: 27, color: '#4ECDC4' },
+  { from: 27, to: 29, color: '#4ECDC4' },
+  { from: 27, to: 31, color: '#4ECDC4' },
+  // 右脚
+  { from: 24, to: 26, color: '#FFE66D' },
+  { from: 26, to: 28, color: '#FFE66D' },
+  { from: 28, to: 30, color: '#FFE66D' },
+  { from: 28, to: 32, color: '#FFE66D' },
+];
+
+// 信頼度で色分けするランドマーク番号→色
+function landmarkColor(index) {
+  if (index <= 10) return '#FF6B6B';             // 顔
+  if ([11,13,15,17,19,21,23,25,27,29,31].includes(index)) return '#4ECDC4'; // 左
+  return '#FFE66D';                               // 右
+}
+
+function drawColoredSkeleton(landmarks, w, h) {
+  ctx.lineCap = 'round';
+  for (const conn of BODY_CONNECTIONS) {
+    const a = landmarks[conn.from];
+    const b = landmarks[conn.to];
+    // 信頼度が低い点はスキップ
+    if ((a.visibility ?? 1) < 0.3 || (b.visibility ?? 1) < 0.3) continue;
+
+    ctx.beginPath();
+    ctx.moveTo(a.x * w, a.y * h);
+    ctx.lineTo(b.x * w, b.y * h);
+    ctx.strokeStyle = conn.color;
+    ctx.lineWidth = 4;
+    ctx.globalAlpha = 0.85;
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawLandmarkDots(landmarks, w, h) {
+  for (let i = 0; i < landmarks.length; i++) {
+    const lm = landmarks[i];
+    if ((lm.visibility ?? 1) < 0.3) continue;
+
+    const x = lm.x * w;
+    const y = lm.y * h;
+    const color = landmarkColor(i);
+
+    // 外側の白リング
+    ctx.beginPath();
+    ctx.arc(x, y, 7, 0, Math.PI * 2);
+    ctx.fillStyle = 'white';
+    ctx.fill();
+
+    // 中心の色付き点
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
+}
+
+// ===== カメラ起動 =====
+async function startCamera() {
+  try {
+    loadingText.textContent = 'カメラを起動中...';
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+      audio: false,
+    });
+    video.srcObject = stream;
+    await new Promise(resolve => { video.onloadedmetadata = resolve; });
+
+    loadingText.textContent = 'MediaPipe モデルを読み込み中...';
+
+    const camera = new Camera(video, {
+      onFrame: async () => {
+        await pose.send({ image: video });
+      },
+      width: 1280,
+      height: 720,
+    });
+    await camera.start();
+
+    loading.style.display = 'none';
+    statusEl.textContent = '動作中';
+    statusEl.className = 'ready';
+
+  } catch (err) {
+    loading.style.display = 'none';
+    document.getElementById('cam-error').style.display = 'flex';
+    statusEl.textContent = 'エラー';
+    statusEl.className = 'error';
+    console.error(err);
+  }
+}
+
+startCamera();
+</script>
+</body>
+</html>
