@@ -143,14 +143,14 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0d0d2b);
 scene.fog = new THREE.FogExp2(0x0d0d2b, 0.06);
 
-// カメラ（少し斜め上から見下ろす）
-const cam = new THREE.PerspectiveCamera(42, 1, 0.1, 40);
-cam.position.set(0, 1.8, 4.2);
-cam.lookAt(0, 0.9, 0);
+// カメラ（広角・全身が入るよう引き気味）
+const cam = new THREE.PerspectiveCamera(62, 1, 0.1, 40);
+cam.position.set(0, 1.6, 5.2);
+cam.lookAt(0, 0.8, 0);
 
 // オービットコントロール
 const controls = new OrbitControls(cam, threeCanvas);
-controls.target.set(0, 0.9, 0);
+controls.target.set(0, 0.8, 0);
 controls.enableDamping = true;
 controls.dampingFactor = 0.06;
 controls.minDistance = 1.5;
@@ -461,16 +461,27 @@ pose.onResults(results => {
   skelCanvas.height = h;
 
   skelCtx.clearRect(0, 0, w, h);
-  skelCtx.drawImage(results.image, 0, 0);
+
+  // 映像を 78% に縮小して上下左右に余白を作り全身が収まりやすくする
+  const VIEW = 0.78;
+  const ox = w * (1 - VIEW) / 2;
+  const oy = h * (1 - VIEW) / 2;
+  skelCtx.save();
+  skelCtx.translate(ox, oy);
+  skelCtx.scale(VIEW, VIEW);
+
+  skelCtx.drawImage(results.image, 0, 0, w, h);
 
   if (results.poseLandmarks && results.poseWorldLandmarks) {
     detectLabel.textContent = '検出中 ✓';
-    drawSkeleton(results.poseLandmarks, w, h);
+    drawSkeleton(results.poseLandmarks, w, h); // transform 内なので座標も自動でズームアウト
     worldLm = results.poseWorldLandmarks;
   } else {
     detectLabel.textContent = '未検出';
     worldLm = null;
   }
+
+  skelCtx.restore();
 });
 
 // ===== カメラ起動 =====
