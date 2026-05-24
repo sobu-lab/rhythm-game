@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>骨格 × アバター連携デモ</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0d0d2b;
+    color: white;
+    font-family: sans-serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  #header {
+    padding: 8px 16px;
+    background: #16213e;
+    border-bottom: 3px solid #FFE66D;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+  #header h1 { font-size: 1.1rem; color: #FFE66D; }
+  #status {
+    font-size: 0.8rem;
+    padding: 3px 10px;
+    border-radius: 20px;
+    background: #333;
+    color: #aaa;
+  }
+  #status.ready { background: #14532d; color: #4ade80; }
+  #status.error { background: #7f1d1d; color: #f87171; }
+
+  #panels {
+    flex: 1;
+    display: flex;
+    gap: 8px;
+    padding: 8px;
+    min-height: 0;
+  }
+
+  #camera-panel {
+    flex: 1;
+    position: relative;
+    background: #000;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 2px solid #2a2a5a;
+  }
+  #input-video { display: none; }
+  #skeleton-canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    transform: scaleX(-1); /* ミラー表示 */
+    object-fit: contain;
+  }
+
+  #avatar-panel {
+    flex: 1;
+    background: #0d0d2b;
+    border-radius: 12px;
+    border: 2px solid #2a2a5a;
+    overflow: hidden;
+  }
+  #avatar-canvas { width: 100%; height: 100%; display: block; }
+
+  #loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: rgba(13,13,43,0.92);
+  }
+  .spinner {
+    width: 44px; height: 44px;
+    border: 4px solid #2a2a5a;
+    border-top-color: #FFE66D;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loading p { color: #aaa; font-size: 0.85rem; }
+
+  #footer {
+    padding: 6px 16px;
+    background: #16213e;
+    border-top: 1px solid #2a2a5a;
+    font-size: 0.75rem;
+    color: #666;
+    flex-shrink: 0;
+    display: flex;
+    gap: 24px;
+    align-items: center;
+  }
+  #footer span { color: #FFE66D; font-weight: bold; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>🦴 骨格 × アバター連携デモ</h1>
+  <div id="status">読み込み中...</div>
+</div>
+
+<div id="panels">
+  <div id="camera-panel">
+    <video id="input-video" playsinline muted autoplay></video>
+    <canvas id="skeleton-canvas"></canvas>
+    <div id="loading">
+      <div class="spinner"></div>
+      <p id="loading-text">初期化中...</p>
+    </div>
+  </div>
+  <div id="avatar-panel">
+    <canvas id="avatar-canvas"></canvas>
+  </div>
+</div>
+
+<div id="footer">
+  <div>左：カメラ映像 + 骨格オーバーレイ</div>
+  <div>右：アバター（骨格連携）</div>
+  <div>FPS: <span id="fps-label">—</span></div>
+  <div>検出: <span id="detect-label">待機中</span></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+
+<script>
+// ===== DOM =====
+const video        = document.getElementById('input-video');
+const skelCanvas   = document.getElementById('skeleton-canvas');
+const skelCtx      = skelCanvas.getContext('2d');
+const avatarCanvas = document.getElementById('avatar-canvas');
+const avatarCtx    = avatarCanvas.getContext('2d');
+const loading      = document.getElementById('loading');
+const loadingText  = document.getElementById('loading-text');
+const statusEl     = document.getElementById('status');
+const fpsLabel     = document.getElementById('fps-label');
+const detectLabel  = document.getElementById('detect-label');
+
+// ===== 関節角度（ラジアン、スクリーン座標系） =====
+// π/2 = 真下、-π/2 = 真上、0 = 右、±π = 左
+const J = {
+  lUpperArm: Math.PI / 2,
+  lForearm:  Math.PI / 2,
+  rUpperArm: Math.PI / 2,
+  rForearm:  Math.PI / 2,
+  lThigh: Math.PI / 2,
+  lShin:  Math.PI / 2,
+  rThigh: Math.PI / 2,
+  rShin:  Math.PI / 2,
+  bodyY:  0.5,   // 腰の高さ（正規化）
+};
+
+// 追従の滑らかさ（0.1=ゆっくり、0.4=素早い）
+const SMOOTH = 0.3;
+
+// 角度の差をπ以内に収めてスムージング
+function smoothAngle(cur, target) {
+  let d = target - cur;
+  while (d >  Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return cur + d * SMOOTH;
+}
+
+// ===== ミラー座標系での角度計算 =====
+// カメラはCSS scaleX(-1)でミラー表示。
+// MediaPipe の x は非ミラー（x=0が左）なので、
+// ミラー後の視覚座標では visual_x = 1 - x
+function mirrorAngle(a, b) {
+  if (!a || !b) return null;
+  if ((a.visibility ?? 1) < 0.25 || (b.visibility ?? 1) < 0.25) return null;
+  const dx = (1 - b.x) - (1 - a.x); // = a.x - b.x
+  const dy = b.y - a.y;
+  return Math.atan2(dy, dx);
+}
+
+// ===== FPS 計測 =====
+let lastFpsTime = performance.now(), fpsCount = 0;
+
+// ===== MediaPipe Pose 初期化 =====
+const pose = new Pose({
+  locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}`,
+});
+pose.setOptions({
+  modelComplexity: 1,
+  smoothLandmarks: true,
+  minDetectionConfidence: 0.5,
+  minTrackingConfidence: 0.5,
+});
+pose.onResults(onResults);
+
+// ===== 骨格線の定義 =====
+const SKEL_LINES = [
+  // 体幹
+  { a:11, b:12, color:'#FF6B6B' },
+  { a:11, b:23, color:'#FF6B6B' },
+  { a:12, b:24, color:'#FF6B6B' },
+  { a:23, b:24, color:'#FF6B6B' },
+  // 左腕（MediaPipe右側、ミラー後は画面左）
+  { a:12, b:14, color:'#4ECDC4' },
+  { a:14, b:16, color:'#4ECDC4' },
+  // 右腕（MediaPipe左側、ミラー後は画面右）
+  { a:11, b:13, color:'#FFE66D' },
+  { a:13, b:15, color:'#FFE66D' },
+  // 左脚
+  { a:24, b:26, color:'#4ECDC4' },
+  { a:26, b:28, color:'#4ECDC4' },
+  // 右脚
+  { a:23, b:25, color:'#FFE66D' },
+  { a:25, b:27, color:'#FFE66D' },
+];
+
+// ===== MediaPipe コールバック =====
+function onResults(results) {
+  const w = results.image.width;
+  const h = results.image.height;
+  skelCanvas.width  = w;
+  skelCanvas.height = h;
+
+  // カメラ映像描画
+  skelCtx.clearRect(0, 0, w, h);
+  skelCtx.drawImage(results.image, 0, 0, w, h);
+
+  if (results.poseLandmarks) {
+    const lm = results.poseLandmarks;
+    detectLabel.textContent = '検出中 ✓';
+
+    // 骨格線
+    skelCtx.lineCap = 'round';
+    for (const l of SKEL_LINES) {
+      const a = lm[l.a], b = lm[l.b];
+      if ((a.visibility??1) < 0.3 || (b.visibility??1) < 0.3) continue;
+      skelCtx.beginPath();
+      skelCtx.moveTo(a.x * w, a.y * h);
+      skelCtx.lineTo(b.x * w, b.y * h);
+      skelCtx.strokeStyle = l.color;
+      skelCtx.lineWidth = 4;
+      skelCtx.globalAlpha = 0.85;
+      skelCtx.stroke();
+    }
+    skelCtx.globalAlpha = 1;
+
+    // 関節点
+    for (const p of lm) {
+      if ((p.visibility??1) < 0.3) continue;
+      skelCtx.beginPath();
+      skelCtx.arc(p.x * w, p.y * h, 6, 0, Math.PI * 2);
+      skelCtx.fillStyle = 'white'; skelCtx.fill();
+      skelCtx.beginPath();
+      skelCtx.arc(p.x * w, p.y * h, 4, 0, Math.PI * 2);
+      skelCtx.fillStyle = '#FFE66D'; skelCtx.fill();
+    }
+
+    // ===== アバター関節角度を更新 =====
+    // ミラー後の視覚的な左右に合わせて:
+    //   アバター左 = 画面左 = ミラー後左 = MediaPipe右側 (12,14,16,24,26,28)
+    //   アバター右 = 画面右 = ミラー後右 = MediaPipe左側 (11,13,15,23,25,27)
+
+    let ang;
+    ang = mirrorAngle(lm[12], lm[14]); if (ang !== null) J.lUpperArm = smoothAngle(J.lUpperArm, ang);
+    ang = mirrorAngle(lm[14], lm[16]); if (ang !== null) J.lForearm  = smoothAngle(J.lForearm,  ang);
+    ang = mirrorAngle(lm[11], lm[13]); if (ang !== null) J.rUpperArm = smoothAngle(J.rUpperArm, ang);
+    ang = mirrorAngle(lm[13], lm[15]); if (ang !== null) J.rForearm  = smoothAngle(J.rForearm,  ang);
+    ang = mirrorAngle(lm[24], lm[26]); if (ang !== null) J.lThigh    = smoothAngle(J.lThigh,    ang);
+    ang = mirrorAngle(lm[26], lm[28]); if (ang !== null) J.lShin     = smoothAngle(J.lShin,     ang);
+    ang = mirrorAngle(lm[23], lm[25]); if (ang !== null) J.rThigh    = smoothAngle(J.rThigh,    ang);
+    ang = mirrorAngle(lm[25], lm[27]); if (ang !== null) J.rShin     = smoothAngle(J.rShin,     ang);
+
+    // 腰の高さ（0=上、1=下）
+    const hipY = (lm[23].y + lm[24].y) / 2;
+    J.bodyY += (hipY - J.bodyY) * SMOOTH;
+
+  } else {
+    detectLabel.textContent = '未検出';
+  }
+
+  // FPS
+  fpsCount++;
+  const now = performance.now();
+  if (now - lastFpsTime >= 1000) {
+    fpsLabel.textContent = fpsCount;
+    fpsCount = 0;
+    lastFpsTime = now;
+  }
+}
+
+// ===== アバター描画ループ =====
+let aniFrame = 0;
+
+function avatarLoop() {
+  requestAnimationFrame(avatarLoop);
+  aniFrame++;
+
+  const W = avatarCanvas.width  = avatarCanvas.offsetWidth;
+  const H = avatarCanvas.height = avatarCanvas.offsetHeight;
+
+  avatarCtx.clearRect(0, 0, W, H);
+
+  // 背景グラデーション
+  const bg = avatarCtx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#0d0d2b');
+  bg.addColorStop(1, '#1a1a3e');
+  avatarCtx.fillStyle = bg;
+  avatarCtx.fillRect(0, 0, W, H);
+
+  // 床グリッド
+  avatarCtx.strokeStyle = 'rgba(255,230,109,0.08)';
+  avatarCtx.lineWidth = 1;
+  for (let i = 0; i < 6; i++) {
+    const y = H * 0.8 + i * 18;
+    avatarCtx.beginPath();
+    avatarCtx.moveTo(0, y);
+    avatarCtx.lineTo(W, y);
+    avatarCtx.stroke();
+  }
+
+  const scale = Math.min(W, H) / 380;
+  const cx = W / 2;
+  // 腰Y：bodyY=0.3→上側、bodyY=0.7→下側 になるよう変換
+  const hipY = H * (0.25 + J.bodyY * 0.6);
+
+  drawAvatar(cx, hipY, scale);
+}
+
+// ===== アバター本体描画 =====
+function drawAvatar(cx, hipY, s) {
+  const c = avatarCtx;
+
+  // 各部位のサイズ（スケール前px）
+  const TW = 50, TH = 58;          // 胴体
+  const UAL = 44, UAW = 17;        // 上腕
+  const FAL = 38, FAW = 14;        // 前腕
+  const HAND = 9;                   // 手の半径
+  const THL = 50, THW = 21;        // 太もも
+  const SHL = 46, SHW = 17;        // すね
+  const HW = 42, HH = 44;          // 頭
+
+  const torsoTop  = hipY - TH * s;
+  const torsoLeft = cx - TW / 2 * s;
+
+  // ── 影 ──
+  c.fillStyle = 'rgba(0,0,0,0.25)';
+  c.beginPath();
+  c.ellipse(cx, hipY + (THL + SHL) * s + 8 * s, 32 * s, 8 * s, 0, 0, Math.PI * 2);
+  c.fill();
+
+  // ── 脚（胴体より下レイヤー） ──
+  // 左脚
+  const lHip   = { x: cx - 13 * s, y: hipY };
+  const lKnee  = tip(lHip,  J.lThigh, THL * s);
+  const lAnkle = tip(lKnee, J.lShin,  SHL * s);
+  limb(c, lHip,  J.lThigh, THL * s, THW * s, '#2563EB', '#1D4ED8');
+  limb(c, lKnee, J.lShin,  SHL * s, SHW * s, '#1E40AF', '#1e3a8a');
+  foot(c, lAnkle, s);
+
+  // 右脚
+  const rHip   = { x: cx + 13 * s, y: hipY };
+  const rKnee  = tip(rHip,  J.rThigh, THL * s);
+  const rAnkle = tip(rKnee, J.rShin,  SHL * s);
+  limb(c, rHip,  J.rThigh, THL * s, THW * s, '#2563EB', '#1D4ED8');
+  limb(c, rKnee, J.rShin,  SHL * s, SHW * s, '#1E40AF', '#1e3a8a');
+  foot(c, rAnkle, s);
+
+  // ── 胴体 ──
+  block(c, torsoLeft, torsoTop, TW * s, TH * s, '#EF4444', '#DC2626', s);
+  // ストライプ
+  c.fillStyle = 'rgba(255,255,255,0.1)';
+  c.fillRect(torsoLeft, torsoTop, TW * s, 9 * s);
+
+  // ── 腕 ──
+  const lSh = { x: cx - (TW / 2 + UAW / 2 - 2) * s, y: torsoTop + 6 * s };
+  const rSh = { x: cx + (TW / 2 + UAW / 2 - 2) * s, y: torsoTop + 6 * s };
+
+  // 左腕
+  const lElbow = tip(lSh,    J.lUpperArm, UAL * s);
+  const lWrist = tip(lElbow, J.lForearm,  FAL * s);
+  limb(c, lSh,    J.lUpperArm, UAL * s, UAW * s, '#FBBF24', '#D97706');
+  limb(c, lElbow, J.lForearm,  FAL * s, FAW * s, '#FCD34D', '#F59E0B');
+  hand(c, lWrist, HAND * s, '#FDE68A');
+
+  // 右腕
+  const rElbow = tip(rSh,    J.rUpperArm, UAL * s);
+  const rWrist = tip(rElbow, J.rForearm,  FAL * s);
+  limb(c, rSh,    J.rUpperArm, UAL * s, UAW * s, '#FBBF24', '#D97706');
+  limb(c, rElbow, J.rForearm,  FAL * s, FAW * s, '#FCD34D', '#F59E0B');
+  hand(c, rWrist, HAND * s, '#FDE68A');
+
+  // ── 頭 ──
+  const hcx = cx, hcy = torsoTop - HH / 2 * s - 2 * s;
+  c.save();
+  c.translate(hcx, hcy);
+  // 顔
+  c.fillStyle = '#FBBF24';
+  c.fillRect(-HW / 2 * s, -HH / 2 * s, HW * s, HH * s);
+  // 3D端
+  c.fillStyle = '#F59E0B';
+  c.fillRect(HW / 2 * s,        -HH / 2 * s + 3 * s, 4 * s, HH * s);
+  c.fillRect(-HW / 2 * s + 3 * s, HH / 2 * s,        HW * s, 4 * s);
+  // 輪郭
+  c.strokeStyle = 'rgba(0,0,0,0.35)'; c.lineWidth = 1.5;
+  c.strokeRect(-HW / 2 * s, -HH / 2 * s, HW * s, HH * s);
+  // 目
+  c.fillStyle = '#1a1a2e';
+  c.fillRect(-11 * s, -9 * s, 8 * s, 8 * s);
+  c.fillRect(3 * s,  -9 * s, 8 * s, 8 * s);
+  c.fillStyle = 'white';
+  c.fillRect(-9 * s, -7 * s, 3 * s, 3 * s);
+  c.fillRect(5 * s,  -7 * s, 3 * s, 3 * s);
+  // 口
+  c.strokeStyle = '#92400E'; c.lineWidth = 2.2 * s; c.lineCap = 'round';
+  c.beginPath(); c.arc(0, 4 * s, 7 * s, 0.15, Math.PI - 0.15); c.stroke();
+  // 帽子つば
+  c.fillStyle = '#D97706';
+  c.fillRect((-HW / 2 - 3) * s, (-HH / 2 - 2) * s, (HW + 6) * s, 5 * s);
+  c.restore();
+
+  // ── 関節ハイライト ──
+  for (const pt of [lElbow, rElbow, lKnee, rKnee]) {
+    c.beginPath();
+    c.arc(pt.x, pt.y, 5 * s, 0, Math.PI * 2);
+    c.fillStyle = 'rgba(255,230,109,0.55)';
+    c.fill();
+  }
+}
+
+// ===== ヘルパー関数 =====
+
+// セグメント先端の座標
+function tip(from, angle, length) {
+  return { x: from.x + Math.cos(angle) * length, y: from.y + Math.sin(angle) * length };
+}
+
+// 四肢セグメント（ピボットから angle 方向に矩形）
+function limb(c, from, angle, length, width, colorFront, colorEdge) {
+  c.save();
+  c.translate(from.x, from.y);
+  c.rotate(angle);
+  c.fillStyle = colorFront;
+  c.fillRect(0, -width / 2, length, width);
+  c.fillStyle = colorEdge;
+  c.fillRect(0, width / 2 - 3, length, 4);   // 下端シャドウ
+  c.fillRect(length - 3, -width / 2, 4, width); // 右端シャドウ
+  c.strokeStyle = 'rgba(0,0,0,0.3)'; c.lineWidth = 1.5;
+  c.strokeRect(0, -width / 2, length, width);
+  c.restore();
+}
+
+// 胴体ブロック
+function block(c, x, y, w, h, colorTop, colorSide, s) {
+  c.fillStyle = colorTop;
+  c.fillRect(x, y, w, h);
+  c.fillStyle = colorSide;
+  c.fillRect(x + w, y + 3 * s, 4 * s, h);
+  c.fillRect(x + 3 * s, y + h, w, 4 * s);
+  c.strokeStyle = 'rgba(0,0,0,0.35)'; c.lineWidth = 1.5;
+  c.strokeRect(x, y, w, h);
+}
+
+// 手（丸）
+function hand(c, pos, r, color) {
+  c.beginPath();
+  c.arc(pos.x, pos.y, r, 0, Math.PI * 2);
+  c.fillStyle = color; c.fill();
+  c.strokeStyle = 'rgba(0,0,0,0.3)'; c.lineWidth = 1.5; c.stroke();
+}
+
+// 足先（楕円）
+function foot(c, ankle, s) {
+  c.fillStyle = '#1E3A8A';
+  c.beginPath();
+  c.ellipse(ankle.x, ankle.y + 5 * s, 13 * s, 7 * s, 0, 0, Math.PI * 2);
+  c.fill();
+}
+
+// ===== カメラ起動 =====
+async function startCamera() {
+  try {
+    loadingText.textContent = 'カメラを起動中...';
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+      audio: false,
+    });
+    video.srcObject = stream;
+    await new Promise(r => { video.onloadedmetadata = r; });
+
+    loadingText.textContent = 'MediaPipe モデルを読み込み中...';
+
+    const camera = new Camera(video, {
+      onFrame: async () => { await pose.send({ image: video }); },
+      width: 1280, height: 720,
+    });
+    await camera.start();
+
+    loading.style.display = 'none';
+    statusEl.textContent = '動作中';
+    statusEl.className = 'ready';
+
+  } catch (err) {
+    loadingText.textContent = 'エラー: ' + err.message;
+    statusEl.textContent = 'エラー';
+    statusEl.className = 'error';
+    console.error(err);
+  }
+}
+
+startCamera();
+avatarLoop();
+</script>
+</body>
+</html>
