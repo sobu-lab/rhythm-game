@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D アバター × 骨格連携</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0d0d2b;
+    color: white;
+    font-family: sans-serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  #header {
+    padding: 8px 16px;
+    background: #16213e;
+    border-bottom: 3px solid #FFE66D;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+  #header h1 { font-size: 1.1rem; color: #FFE66D; }
+  #status {
+    font-size: 0.8rem; padding: 3px 10px;
+    border-radius: 20px; background: #333; color: #aaa;
+  }
+  #status.ready { background: #14532d; color: #4ade80; }
+  #status.error { background: #7f1d1d; color: #f87171; }
+
+  #panels {
+    flex: 1; display: flex; gap: 8px; padding: 8px; min-height: 0;
+  }
+
+  #camera-panel {
+    flex: 1; position: relative; background: #000;
+    border-radius: 12px; overflow: hidden; border: 2px solid #2a2a5a;
+  }
+  #input-video { display: none; }
+  #skeleton-canvas {
+    width: 100%; height: 100%; display: block;
+    transform: scaleX(-1); /* ミラー表示 */
+  }
+
+  #three-panel {
+    flex: 1; background: #0d0d2b;
+    border-radius: 12px; border: 2px solid #2a2a5a; overflow: hidden;
+  }
+  #three-canvas { width: 100%; height: 100%; display: block; }
+
+  #loading {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 12px; background: rgba(13,13,43,0.92);
+  }
+  .spinner {
+    width: 44px; height: 44px;
+    border: 4px solid #2a2a5a; border-top-color: #FFE66D;
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loading p { color: #aaa; font-size: 0.85rem; }
+
+  #footer {
+    padding: 6px 16px; background: #16213e; border-top: 1px solid #2a2a5a;
+    font-size: 0.75rem; color: #666; flex-shrink: 0;
+    display: flex; gap: 24px; align-items: center;
+  }
+  #footer span { color: #FFE66D; font-weight: bold; }
+  #hint { font-size: 0.7rem; color: #444; margin-left: auto; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>🧊 3D アバター × 骨格連携</h1>
+  <div id="status">読み込み中...</div>
+</div>
+
+<div id="panels">
+  <div id="camera-panel">
+    <video id="input-video" playsinline muted autoplay></video>
+    <canvas id="skeleton-canvas"></canvas>
+    <div id="loading">
+      <div class="spinner"></div>
+      <p id="loading-text">初期化中...</p>
+    </div>
+  </div>
+  <div id="three-panel">
+    <canvas id="three-canvas"></canvas>
+  </div>
+</div>
+
+<div id="footer">
+  <div>左：カメラ + 骨格</div>
+  <div>右：3D アバター</div>
+  <div>FPS: <span id="fps-label">—</span></div>
+  <div>検出: <span id="detect-label">待機中</span></div>
+  <div id="hint">ドラッグ：回転　スクロール：ズーム</div>
+</div>
+
+<!-- MediaPipe (グローバル変数として読み込む) -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+
+<!-- Three.js (ES Module) -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ===== DOM =====
+const video       = document.getElementById('input-video');
+const skelCanvas  = document.getElementById('skeleton-canvas');
+const skelCtx     = skelCanvas.getContext('2d');
+const threeCanvas = document.getElementById('three-canvas');
+const loading     = document.getElementById('loading');
+const loadingText = document.getElementById('loading-text');
+const statusEl    = document.getElementById('status');
+const detectLabel = document.getElementById('detect-label');
+const fpsLabel    = document.getElementById('fps-label');
+
+// ===== Three.js シーン =====
+const renderer = new THREE.WebGLRenderer({ canvas: threeCanvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d0d2b);
+scene.fog = new THREE.FogExp2(0x0d0d2b, 0.06);
+
+// カメラ（少し斜め上から見下ろす）
+const cam = new THREE.PerspectiveCamera(42, 1, 0.1, 40);
+cam.position.set(0, 1.8, 4.2);
+cam.lookAt(0, 0.9, 0);
+
+// オービットコントロール
+const controls = new OrbitControls(cam, threeCanvas);
+controls.target.set(0, 0.9, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.minDistance = 1.5;
+controls.maxDistance = 9;
+
+// ===== ライティング =====
+scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+
+const sunLight = new THREE.DirectionalLight(0xffffff, 1.1);
+sunLight.position.set(2, 5, 3);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.set(1024, 1024);
+sunLight.shadow.camera.left  = -2.5; sunLight.shadow.camera.right  = 2.5;
+sunLight.shadow.camera.top   = 3.5;  sunLight.shadow.camera.bottom = -1;
+sunLight.shadow.camera.near  = 0.5;  sunLight.shadow.camera.far    = 15;
+scene.add(sunLight);
+
+// アクセントライト（色味を足す）
+const lightL = new THREE.PointLight(0x4ECDC4, 0.5, 7);
+lightL.position.set(-2.5, 2, 1.5);
+scene.add(lightL);
+const lightR = new THREE.PointLight(0xFF6B6B, 0.35, 7);
+lightR.position.set(2.5, 1, -1);
+scene.add(lightR);
+
+// ===== 床 =====
+const floorMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(7, 7),
+  new THREE.MeshLambertMaterial({ color: 0x0a0a25 })
+);
+floorMesh.rotation.x = -Math.PI / 2;
+floorMesh.position.y = -0.01;
+floorMesh.receiveShadow = true;
+scene.add(floorMesh);
+scene.add(new THREE.GridHelper(7, 22, 0x1a1a4a, 0x1a1a4a));
+
+// ===== マテリアル =====
+const M = {
+  head:  new THREE.MeshLambertMaterial({ color: 0xFBBF24 }),
+  hat:   new THREE.MeshLambertMaterial({ color: 0xD97706 }),
+  torso: new THREE.MeshLambertMaterial({ color: 0xEF4444 }),
+  stripe:new THREE.MeshLambertMaterial({ color: 0xDC2626 }),
+  arm:   new THREE.MeshLambertMaterial({ color: 0xFBBF24 }),
+  leg:   new THREE.MeshLambertMaterial({ color: 0x2563EB }),
+  eye:   new THREE.MeshLambertMaterial({ color: 0x111827 }),
+  joint: new THREE.MeshLambertMaterial({ color: 0xFFE66D, emissive: 0x443300 }),
+};
+
+// ===== アバター組み立てヘルパー =====
+// pivot (関節位置) → mesh (pivot から下方向にオフセット) → childPivot (セグメント末端)
+function makeSegment(w, h, d, mat) {
+  const pivot = new THREE.Group();
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  mesh.position.y = -h / 2;
+  mesh.castShadow = true;
+  pivot.add(mesh);
+  const childPivot = new THREE.Group();
+  childPivot.position.y = -h;
+  pivot.add(childPivot);
+  return { pivot, childPivot };
+}
+
+function addBox(parent, w, h, d, mat, x, y, z) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  m.position.set(x, y, z);
+  m.castShadow = true;
+  parent.add(m);
+  return m;
+}
+
+function addJointSphere(parent) {
+  const m = new THREE.Mesh(new THREE.SphereGeometry(0.065, 8, 8), M.joint);
+  m.castShadow = false;
+  parent.add(m);
+}
+
+// ===== アバター構築 =====
+// アバタールートを腰の位置に配置（足が床に立つよう y=1.0 に設置）
+const avatarRoot = new THREE.Group();
+avatarRoot.position.y = 1.0;
+scene.add(avatarRoot);
+
+// 胴体（腰から上へ）
+addBox(avatarRoot, 0.55, 0.76, 0.28, M.torso, 0, 0.38, 0);
+addBox(avatarRoot, 0.56, 0.07, 0.29, M.stripe, 0, 0.71, 0); // 胸ストライプ
+
+// 頭
+const headPivot = new THREE.Group();
+headPivot.position.set(0, 0.76, 0);
+avatarRoot.add(headPivot);
+addBox(headPivot, 0.40, 0.42, 0.40, M.head, 0, 0.21, 0);
+addBox(headPivot, 0.48, 0.05, 0.48, M.hat, 0, 0.43, 0);  // 帽子つば
+addBox(headPivot, 0.07, 0.07, 0.06, M.eye, -0.11, 0.26, 0.21); // 目L
+addBox(headPivot, 0.07, 0.07, 0.06, M.eye,  0.11, 0.26, 0.21); // 目R
+
+// 腕（左：画面左 = 実際の右腕 in mirror）
+const lSh = makeSegment(0.18, 0.44, 0.18, M.arm);
+lSh.pivot.position.set(-0.37, 0.67, 0);
+avatarRoot.add(lSh.pivot);
+
+const lEl = makeSegment(0.15, 0.38, 0.15, M.arm);
+lSh.childPivot.add(lEl.pivot);
+addJointSphere(lSh.childPivot); // 肘ジョイント
+
+addBox(lEl.childPivot, 0.15, 0.20, 0.10, M.arm, 0, -0.10, 0); // 手
+
+// 右腕
+const rSh = makeSegment(0.18, 0.44, 0.18, M.arm);
+rSh.pivot.position.set(0.37, 0.67, 0);
+avatarRoot.add(rSh.pivot);
+
+const rEl = makeSegment(0.15, 0.38, 0.15, M.arm);
+rSh.childPivot.add(rEl.pivot);
+addJointSphere(rSh.childPivot);
+
+addBox(rEl.childPivot, 0.15, 0.20, 0.10, M.arm, 0, -0.10, 0);
+
+// 脚（左）
+const lHp = makeSegment(0.22, 0.50, 0.22, M.leg);
+lHp.pivot.position.set(-0.14, 0, 0);
+avatarRoot.add(lHp.pivot);
+
+const lKn = makeSegment(0.18, 0.46, 0.18, M.leg);
+lHp.childPivot.add(lKn.pivot);
+addJointSphere(lHp.childPivot); // 膝ジョイント
+
+addBox(lKn.childPivot, 0.16, 0.09, 0.28, M.leg, 0.02, -0.045, 0.06); // 足
+
+// 脚（右）
+const rHp = makeSegment(0.22, 0.50, 0.22, M.leg);
+rHp.pivot.position.set(0.14, 0, 0);
+avatarRoot.add(rHp.pivot);
+
+const rKn = makeSegment(0.18, 0.46, 0.18, M.leg);
+rHp.childPivot.add(rKn.pivot);
+addJointSphere(rHp.childPivot);
+
+addBox(rKn.childPivot, 0.16, 0.09, 0.28, M.leg, 0.02, -0.045, 0.06);
+
+// 関節のピボット参照をまとめる
+const bones = {
+  lShoulder: lSh.pivot, lElbow: lEl.pivot,
+  rShoulder: rSh.pivot, rElbow: rEl.pivot,
+  lHip: lHp.pivot, lKnee: lKn.pivot,
+  rHip: rHp.pivot, rKnee: rKn.pivot,
+};
+
+// ===== 骨格 → 3D 骨回転 =====
+// poseWorldLandmarks を使用（3D 座標、腰中心、Y上向き）
+// ミラー表示に合わせて X を反転。Three.js の Z 軸は前向きなので Z も反転。
+const _boneDefault = new THREE.Vector3(0, -1, 0); // ボーンのデフォルト方向（下向き）
+const _dir = new THREE.Vector3();
+const _tq  = new THREE.Quaternion();
+const _pq  = new THREE.Quaternion();
+const _lq  = new THREE.Quaternion();
+
+function updateBone(bone, a, b) {
+  if (!a || !b) return;
+  if ((a.visibility ?? 1) < 0.25 || (b.visibility ?? 1) < 0.25) return;
+
+  // ミラー用 X 反転、Three.js 向け Z 反転
+  _dir.set(
+    -(b.x - a.x),   // X: ミラー反転
+     (b.y - a.y),   // Y: world landmarks は上が正
+    -(b.z - a.z)    // Z: Three.js は前が正
+  );
+  if (_dir.lengthSq() < 1e-6) return;
+  _dir.normalize();
+
+  // ターゲット world quaternion（デフォルト下向き → 計算した方向へ）
+  _tq.setFromUnitVectors(_boneDefault, _dir);
+
+  // 親の world quaternion を除いてローカル回転に変換
+  bone.parent.getWorldQuaternion(_pq);
+  _lq.copy(_pq).invert().multiply(_tq);
+
+  bone.quaternion.slerp(_lq, 0.3);
+}
+
+// ===== アイドルアニメーション =====
+function idleAnim(t) {
+  const swing = Math.sin(t * 1.1) * 0.18;
+  // 腕を自然に振る
+  bones.lShoulder.quaternion.slerp(
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(swing,  0, -0.08)), 0.04);
+  bones.lElbow.quaternion.slerp(
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(0.25, 0, 0)), 0.04);
+  bones.rShoulder.quaternion.slerp(
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(-swing, 0, 0.08)), 0.04);
+  bones.rElbow.quaternion.slerp(
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(0.25, 0, 0)), 0.04);
+  // 体のバウンス
+  avatarRoot.position.y = 1.0 + Math.sin(t * 2.2) * 0.018;
+}
+
+// ===== MediaPipe データ受け取り口 =====
+let worldLm = null;
+
+function applyPose(lm) {
+  // ミラー表示なので:
+  //   アバター左腕 = 画面左 = 実際の右腕 (lm 12,14,16)
+  //   アバター右腕 = 画面右 = 実際の左腕 (lm 11,13,15)
+  //   アバター左脚 = 画面左 = 実際の右脚 (lm 24,26,28)
+  //   アバター右脚 = 画面右 = 実際の左脚 (lm 23,25,27)
+  updateBone(bones.lShoulder, lm[12], lm[14]);
+  updateBone(bones.lElbow,    lm[14], lm[16]);
+  updateBone(bones.rShoulder, lm[11], lm[13]);
+  updateBone(bones.rElbow,    lm[13], lm[15]);
+  updateBone(bones.lHip,      lm[24], lm[26]);
+  updateBone(bones.lKnee,     lm[26], lm[28]);
+  updateBone(bones.rHip,      lm[23], lm[25]);
+  updateBone(bones.rKnee,     lm[25], lm[27]);
+}
+
+// ===== リサイズ =====
+function onResize() {
+  const w = threeCanvas.offsetWidth;
+  const h = threeCanvas.offsetHeight;
+  if (!w || !h) return;
+  renderer.setSize(w, h, false);
+  cam.aspect = w / h;
+  cam.updateProjectionMatrix();
+}
+new ResizeObserver(onResize).observe(threeCanvas);
+onResize();
+
+// ===== レンダーループ =====
+const clock = new THREE.Clock();
+let fpsCount = 0, lastFpsTime = performance.now();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+
+  if (worldLm) {
+    applyPose(worldLm);
+    avatarRoot.position.y = 1.0; // 立ち位置固定
+  } else {
+    idleAnim(t);
+  }
+
+  // 頭の微細な揺れ（生きてる感）
+  headPivot.rotation.y = Math.sin(t * 0.7) * 0.03;
+
+  controls.update();
+  renderer.render(scene, cam);
+
+  fpsCount++;
+  const now = performance.now();
+  if (now - lastFpsTime >= 1000) {
+    fpsLabel.textContent = fpsCount;
+    fpsCount = 0;
+    lastFpsTime = now;
+  }
+}
+animate();
+
+// ===== 骨格オーバーレイ（2D canvas） =====
+const SKEL = [
+  { a:11, b:12, c:'#FF6B6B' }, { a:11, b:23, c:'#FF6B6B' },
+  { a:12, b:24, c:'#FF6B6B' }, { a:23, b:24, c:'#FF6B6B' },
+  { a:12, b:14, c:'#4ECDC4' }, { a:14, b:16, c:'#4ECDC4' },
+  { a:11, b:13, c:'#FFE66D' }, { a:13, b:15, c:'#FFE66D' },
+  { a:24, b:26, c:'#4ECDC4' }, { a:26, b:28, c:'#4ECDC4' },
+  { a:23, b:25, c:'#FFE66D' }, { a:25, b:27, c:'#FFE66D' },
+];
+
+function drawSkeleton(lm, w, h) {
+  skelCtx.lineCap = 'round';
+  for (const l of SKEL) {
+    const a = lm[l.a], b = lm[l.b];
+    if ((a.visibility??1) < 0.3 || (b.visibility??1) < 0.3) continue;
+    skelCtx.beginPath();
+    skelCtx.moveTo(a.x*w, a.y*h);
+    skelCtx.lineTo(b.x*w, b.y*h);
+    skelCtx.strokeStyle = l.c;
+    skelCtx.lineWidth = 4;
+    skelCtx.globalAlpha = 0.85;
+    skelCtx.stroke();
+  }
+  skelCtx.globalAlpha = 1;
+  for (const p of lm) {
+    if ((p.visibility??1) < 0.3) continue;
+    skelCtx.beginPath();
+    skelCtx.arc(p.x*w, p.y*h, 6, 0, Math.PI*2);
+    skelCtx.fillStyle = 'white'; skelCtx.fill();
+    skelCtx.beginPath();
+    skelCtx.arc(p.x*w, p.y*h, 4, 0, Math.PI*2);
+    skelCtx.fillStyle = '#FFE66D'; skelCtx.fill();
+  }
+}
+
+// ===== MediaPipe Pose 初期化 =====
+const pose = new window.Pose({
+  locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}`,
+});
+pose.setOptions({
+  modelComplexity: 1,
+  smoothLandmarks: true,
+  enableSegmentation: false,
+  minDetectionConfidence: 0.5,
+  minTrackingConfidence: 0.5,
+});
+pose.onResults(results => {
+  const w = results.image.width;
+  const h = results.image.height;
+  skelCanvas.width  = w;
+  skelCanvas.height = h;
+
+  skelCtx.clearRect(0, 0, w, h);
+  skelCtx.drawImage(results.image, 0, 0);
+
+  if (results.poseLandmarks && results.poseWorldLandmarks) {
+    detectLabel.textContent = '検出中 ✓';
+    drawSkeleton(results.poseLandmarks, w, h);
+    worldLm = results.poseWorldLandmarks;
+  } else {
+    detectLabel.textContent = '未検出';
+    worldLm = null;
+  }
+});
+
+// ===== カメラ起動 =====
+async function startCamera() {
+  try {
+    loadingText.textContent = 'カメラを起動中...';
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+      audio: false,
+    });
+    video.srcObject = stream;
+    await new Promise(r => { video.onloadedmetadata = r; });
+
+    loadingText.textContent = 'MediaPipe モデルを読み込み中...';
+    const mpCam = new window.Camera(video, {
+      onFrame: async () => { await pose.send({ image: video }); },
+      width: 1280, height: 720,
+    });
+    await mpCam.start();
+
+    loading.style.display = 'none';
+    statusEl.textContent = '動作中';
+    statusEl.className = 'ready';
+  } catch (err) {
+    loadingText.textContent = 'エラー: ' + err.message;
+    statusEl.textContent = 'エラー';
+    statusEl.className = 'error';
+    console.error(err);
+  }
+}
+
+startCamera();
+</script>
+</body>
+</html>
