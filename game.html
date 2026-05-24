@@ -1,0 +1,1060 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ふりふりリズム！</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@700;900&family=Kosugi+Maru&display=swap');
+
+  :root {
+    --left-color: #FF6B6B;
+    --right-color: #4ECDC4;
+    --bg: #1a1a2e;
+    --panel: #16213e;
+    --accent: #FFE66D;
+    --hit-glow: rgba(255,230,109,0.8);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: white;
+    font-family: 'Nunito', 'Kosugi Maru', sans-serif;
+    overflow: hidden;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ===== HEADER ===== */
+  #header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 16px;
+    background: var(--panel);
+    border-bottom: 3px solid var(--accent);
+    z-index: 10;
+  }
+
+  #title {
+    font-size: 1.4rem;
+    font-weight: 900;
+    color: var(--accent);
+    letter-spacing: 2px;
+    text-shadow: 0 0 20px rgba(255,230,109,0.5);
+  }
+
+  #score-display {
+    font-size: 1.6rem;
+    font-weight: 900;
+    color: white;
+  }
+
+  #combo-display {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--accent);
+    min-width: 80px;
+    text-align: right;
+  }
+
+  /* ===== MAIN AREA ===== */
+  #main {
+    display: flex;
+    flex: 1;
+    gap: 8px;
+    padding: 8px;
+    min-height: 0;
+  }
+
+  /* ===== GAME FIELD ===== */
+  #game-field {
+    flex: 2;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    background: var(--panel);
+    border-radius: 16px;
+    overflow: hidden;
+    border: 2px solid #2a2a5a;
+  }
+
+  #lanes {
+    flex: 1;
+    display: flex;
+    position: relative;
+    min-height: 0;
+  }
+
+  .lane {
+    flex: 1;
+    position: relative;
+    border-right: 1px solid #2a2a5a;
+    overflow: hidden;
+  }
+  .lane:last-child { border-right: none; }
+
+  /* レーン背景グラデーション */
+  #lane-left  { background: linear-gradient(to bottom, rgba(255,107,107,0.05), rgba(255,107,107,0.02)); }
+  #lane-right { background: linear-gradient(to bottom, rgba(78,205,196,0.05), rgba(78,205,196,0.02)); }
+
+  /* ヒットライン */
+  .hit-line {
+    position: absolute;
+    bottom: 60px;
+    left: 8px; right: 8px;
+    height: 6px;
+    border-radius: 3px;
+    opacity: 0.6;
+  }
+  #lane-left  .hit-line { background: var(--left-color); box-shadow: 0 0 12px var(--left-color); }
+  #lane-right .hit-line { background: var(--right-color); box-shadow: 0 0 12px var(--right-color); }
+
+  /* ヒットゾーン（下部の受け取りエリア表示） */
+  .hit-zone {
+    position: absolute;
+    bottom: 0;
+    left: 0; right: 0;
+    height: 60px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.8rem;
+    font-weight: 900;
+    border-top: 2px solid;
+    transition: all 0.1s;
+  }
+  #lane-left  .hit-zone { border-color: var(--left-color); color: var(--left-color); background: rgba(255,107,107,0.08); }
+  #lane-right .hit-zone { border-color: var(--right-color); color: var(--right-color); background: rgba(78,205,196,0.08); }
+
+  .hit-zone.active {
+    background: rgba(255,230,109,0.15) !important;
+    border-color: var(--accent) !important;
+    color: var(--accent) !important;
+  }
+
+  /* ノーツ */
+  .note {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.6rem;
+    font-weight: 900;
+    animation: noteFall linear forwards;
+    border: 3px solid white;
+  }
+  .note.left-note  { background: radial-gradient(circle, #FF8E8E, var(--left-color)); box-shadow: 0 0 16px var(--left-color); }
+  .note.right-note { background: radial-gradient(circle, #7EEEE8, var(--right-color)); box-shadow: 0 0 16px var(--right-color); }
+
+  @keyframes noteFall {
+    from { top: -70px; }
+    to   { top: 100%; }
+  }
+
+  /* ヒットエフェクト */
+  .hit-effect {
+    position: absolute;
+    left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 2rem;
+    font-weight: 900;
+    color: var(--accent);
+    animation: hitPop 0.4s ease-out forwards;
+    pointer-events: none;
+    text-shadow: 0 0 20px var(--hit-glow);
+    z-index: 20;
+  }
+  @keyframes hitPop {
+    0%   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    100% { opacity: 0; transform: translate(-50%, -100%) scale(1.6); }
+  }
+
+  /* レーンフラッシュ */
+  .lane-flash {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.08s;
+    z-index: 5;
+  }
+  #lane-left  .lane-flash { background: radial-gradient(ellipse at bottom, rgba(255,107,107,0.5), transparent 70%); }
+  #lane-right .lane-flash { background: radial-gradient(ellipse at bottom, rgba(78,205,196,0.5), transparent 70%); }
+  .lane-flash.show { opacity: 1; }
+
+  /* ===== カメラパネル ===== */
+  #camera-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  #camera-container {
+    position: relative;
+    background: #000;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 2px solid #2a2a5a;
+    flex: 1;
+  }
+
+  #camera-video {
+    display: none; /* 映像は非表示・動体検出にだけ使う */
+  }
+
+  #avatar-canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  /* カメラ上の動体インジケーター */
+  .motion-indicator {
+    position: absolute;
+    top: 8px;
+    width: 44%;
+    height: 8px;
+    border-radius: 4px;
+    background: #333;
+    overflow: hidden;
+  }
+  #motion-left-indicator  { left: 4%; }
+  #motion-right-indicator { right: 4%; }
+
+  .motion-bar {
+    height: 100%;
+    width: 0%;
+    border-radius: 4px;
+    transition: width 0.05s;
+  }
+  #motion-left-bar  { background: var(--left-color); }
+  #motion-right-bar { background: var(--right-color); }
+
+  /* センサー感度バー */
+  #sensitivity-section {
+    background: var(--panel);
+    border-radius: 12px;
+    padding: 10px 12px;
+    border: 2px solid #2a2a5a;
+  }
+  #sensitivity-section label {
+    font-size: 0.8rem;
+    color: #aaa;
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 4px;
+  }
+  #sensitivity-section input[type=range] {
+    width: 100%;
+    accent-color: var(--accent);
+  }
+
+  /* ===== スタート画面 ===== */
+  #start-screen {
+    position: absolute;
+    inset: 0;
+    background: rgba(26,26,46,0.95);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    gap: 16px;
+    backdrop-filter: blur(4px);
+  }
+
+  #start-screen h1 {
+    font-size: 2.8rem;
+    font-weight: 900;
+    color: var(--accent);
+    text-align: center;
+    line-height: 1.2;
+    text-shadow: 0 0 30px rgba(255,230,109,0.6);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%,100% { text-shadow: 0 0 20px rgba(255,230,109,0.4); }
+    50%      { text-shadow: 0 0 40px rgba(255,230,109,0.9); }
+  }
+
+  #start-screen p {
+    font-size: 1rem;
+    color: #ccc;
+    text-align: center;
+    line-height: 1.7;
+  }
+
+  .btn {
+    padding: 14px 40px;
+    font-size: 1.2rem;
+    font-weight: 900;
+    font-family: 'Nunito', sans-serif;
+    border: none;
+    border-radius: 50px;
+    cursor: pointer;
+    transition: transform 0.1s, box-shadow 0.1s;
+  }
+  .btn:hover  { transform: scale(1.05); }
+  .btn:active { transform: scale(0.97); }
+
+  .btn-primary {
+    background: var(--accent);
+    color: #1a1a2e;
+    box-shadow: 0 6px 24px rgba(255,230,109,0.4);
+  }
+
+  .btn-secondary {
+    background: transparent;
+    color: #aaa;
+    border: 2px solid #444;
+    font-size: 0.9rem;
+    padding: 8px 20px;
+  }
+
+  /* ===== ゲームオーバー画面 ===== */
+  #result-screen {
+    position: absolute;
+    inset: 0;
+    background: rgba(26,26,46,0.96);
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    gap: 12px;
+    backdrop-filter: blur(6px);
+  }
+
+  #result-screen h2 {
+    font-size: 2.5rem;
+    font-weight: 900;
+    color: var(--accent);
+    text-shadow: 0 0 30px rgba(255,230,109,0.5);
+  }
+
+  .result-row {
+    font-size: 1.1rem;
+    color: #ddd;
+    display: flex;
+    gap: 16px;
+  }
+  .result-val { color: var(--accent); font-weight: 900; }
+
+  /* ===== カウントダウン ===== */
+  #countdown {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+    font-size: 6rem;
+    font-weight: 900;
+    color: var(--accent);
+    text-shadow: 0 0 40px var(--accent);
+    animation: countPop 0.4s ease-out;
+  }
+  @keyframes countPop {
+    from { transform: scale(2); opacity: 0; }
+    to   { transform: scale(1); opacity: 1; }
+  }
+
+  /* ===== プログレスバー ===== */
+  #progress-bar-wrap {
+    height: 6px;
+    background: #2a2a5a;
+    overflow: hidden;
+  }
+  #progress-bar {
+    height: 100%;
+    background: linear-gradient(to right, var(--left-color), var(--accent), var(--right-color));
+    width: 0%;
+    transition: width 0.3s;
+  }
+
+  /* ===== ミス表示 ===== */
+  .miss-effect {
+    position: absolute;
+    left: 50%; bottom: 70px;
+    transform: translateX(-50%);
+    font-size: 1.4rem;
+    font-weight: 900;
+    color: #FF6B6B;
+    animation: hitPop 0.5s ease-out forwards;
+    pointer-events: none;
+    z-index: 20;
+  }
+
+  /* カメラなし表示 */
+  #no-camera {
+    display: none;
+    position: absolute;
+    inset: 0;
+    background: #111;
+    color: #666;
+    font-size: 0.8rem;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 8px;
+    flex-direction: column;
+    gap: 4px;
+  }
+  #no-camera span { font-size: 2rem; }
+</style>
+</head>
+<body>
+
+<!-- ヘッダー -->
+<div id="header">
+  <div id="title">🎵 ふりふりリズム！</div>
+  <div id="score-display">0</div>
+  <div id="combo-display"></div>
+</div>
+
+<!-- プログレスバー -->
+<div id="progress-bar-wrap"><div id="progress-bar"></div></div>
+
+<!-- メインエリア -->
+<div id="main">
+
+  <!-- ゲームフィールド -->
+  <div id="game-field">
+    <div id="lanes">
+      <!-- 左レーン -->
+      <div class="lane" id="lane-left">
+        <div class="lane-flash"></div>
+        <div class="hit-line"></div>
+        <div class="hit-zone">👈</div>
+      </div>
+      <!-- 右レーン -->
+      <div class="lane" id="lane-right">
+        <div class="lane-flash"></div>
+        <div class="hit-line"></div>
+        <div class="hit-zone">👉</div>
+      </div>
+    </div>
+
+    <!-- スタート画面 -->
+    <div id="start-screen">
+      <h1>🎵 ふりふりリズム！</h1>
+      <p>カメラに向かって腕を振ろう！<br>左に振ったら左レーン、右に振ったら右レーン</p>
+      <button class="btn btn-primary" onclick="startGame()">▶ START！</button>
+      <button class="btn btn-secondary" onclick="skipCamera()">カメラなしで試す（キーボード）</button>
+    </div>
+
+    <!-- カウントダウン -->
+    <div id="countdown"></div>
+
+    <!-- リザルト画面 -->
+    <div id="result-screen">
+      <h2>🎉 おわり！</h2>
+      <div class="result-row">スコア: <span class="result-val" id="result-score">0</span></div>
+      <div class="result-row">最大コンボ: <span class="result-val" id="result-combo">0</span></div>
+      <div class="result-row">ヒット率: <span class="result-val" id="result-acc">0%</span></div>
+      <button class="btn btn-primary" onclick="restartGame()">もう一回！</button>
+    </div>
+  </div>
+
+  <!-- カメラパネル -->
+  <div id="camera-panel">
+    <div id="camera-container">
+      <video id="camera-video" autoplay playsinline muted></video>
+      <canvas id="avatar-canvas"></canvas>
+      <div class="motion-indicator" id="motion-left-indicator"><div class="motion-bar" id="motion-left-bar"></div></div>
+      <div class="motion-indicator" id="motion-right-indicator"><div class="motion-bar" id="motion-right-bar"></div></div>
+      <div id="no-camera">
+        <span>📷</span>
+        カメラなしモード<br>← → キーで操作
+      </div>
+    </div>
+
+    <!-- 感度設定 -->
+    <div id="sensitivity-section">
+      <label>感度 <span id="sens-val">20</span></label>
+      <input type="range" id="sensitivity" min="5" max="60" value="20" oninput="updateSensitivity(this.value)">
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ===== 設定 =====
+const SONG_DURATION = 60000; // 60秒
+const NOTE_FALL_SPEED = 2200; // ms（ノーツが落ちる時間）
+const HIT_WINDOW = 250; // ms（判定窓）
+const MISS_WINDOW = 400; // 見逃し判定
+let MOTION_THRESHOLD = 20;
+
+// ===== 状態 =====
+let score = 0, combo = 0, maxCombo = 0;
+let totalNotes = 0, hitNotes = 0;
+let gameRunning = false;
+let gameStartTime = 0;
+let notes = []; // { id, lane, spawnTime, hit, el }
+let noteIdCounter = 0;
+let useCameraMode = true;
+
+// カメラ・動体検出
+let video, overlayCanvas, overlayCtx;
+let prevFrameData = null;
+let motionLeft = 0, motionRight = 0;
+let hitCooldownLeft = 0, hitCooldownRight = 0;
+const COOLDOWN_MS = 250;
+
+// ===== 譜面生成（パターンベース） =====
+function generateBeatmap() {
+  const beats = [];
+  const bpm = 120;
+  const beatMs = 60000 / bpm; // 500ms
+  const totalBeats = Math.floor(SONG_DURATION / beatMs);
+
+  const patterns = [
+    [0], [1], [0], [1],          // 交互
+    [0,1], [0], [1], [0,1],      // 同時あり
+    [0], [0], [1], [1],          // 連続
+    [0,1], [0,1], [0], [1],
+  ];
+
+  let t = beatMs * 2; // 最初2拍は空け
+  let pi = 0;
+  while (t < SONG_DURATION - beatMs * 4) {
+    const pat = patterns[pi % patterns.length];
+    for (const lane of pat) {
+      beats.push({ time: t, lane });
+      totalNotes++;
+    }
+    t += beatMs;
+    pi++;
+  }
+  return beats;
+}
+
+let beatmap = [];
+let beatmapIndex = 0;
+
+// ===== オーディオ（Web Audio APIで音生成） =====
+let audioCtx;
+function initAudio() {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+}
+
+function playHitSound(good) {
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain); gain.connect(audioCtx.destination);
+  osc.frequency.value = good ? 880 : 440;
+  osc.type = good ? 'sine' : 'square';
+  gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + (good ? 0.15 : 0.08));
+  osc.start(); osc.stop(audioCtx.currentTime + 0.2);
+}
+
+function playBGM() {
+  if (!audioCtx) return;
+  // シンプルなビートを打音で生成
+  const bpm = 120;
+  const beatInterval = 60 / bpm;
+  let t = audioCtx.currentTime + 0.1;
+  const endTime = t + SONG_DURATION / 1000;
+
+  function beat(time, freq, type, vol, dur) {
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.connect(g); g.connect(audioCtx.destination);
+    o.frequency.value = freq; o.type = type;
+    g.gain.setValueAtTime(vol, time);
+    g.gain.exponentialRampToValueAtTime(0.001, time + dur);
+    o.start(time); o.stop(time + dur + 0.01);
+  }
+
+  let i = 0;
+  while (t < endTime) {
+    beat(t, i % 4 === 0 ? 80 : 60, 'sine', i % 4 === 0 ? 0.4 : 0.15, 0.05);
+    if (i % 2 === 1) beat(t, 200, 'square', 0.05, 0.03);
+    if (i % 8 === 4) beat(t, 300, 'triangle', 0.1, 0.08);
+    t += beatInterval;
+    i++;
+  }
+}
+
+// ===== アバター状態 =====
+// MediaPipe導入時はここをpose landmarksで上書きするだけでOK
+const avatarState = {
+  leftArmAngle:  -30,  // 度（0=水平、-90=真上）
+  rightArmAngle: -30,
+  leftHit:  false,
+  rightHit: false,
+  bounce: 0,           // 体の上下バウンス
+};
+let avatarCanvas, avatarCtx;
+let avatarAnimFrame = 0;
+
+function initAvatarCanvas() {
+  avatarCanvas = document.getElementById('avatar-canvas');
+  avatarCtx = avatarCanvas.getContext('2d');
+  // コンテナサイズに合わせる
+  const resize = () => {
+    avatarCanvas.width  = avatarCanvas.offsetWidth;
+    avatarCanvas.height = avatarCanvas.offsetHeight;
+  };
+  resize();
+  new ResizeObserver(resize).observe(avatarCanvas);
+  requestAnimationFrame(avatarLoop);
+}
+
+function avatarLoop() {
+  requestAnimationFrame(avatarLoop);
+  avatarAnimFrame++;
+
+  const w = avatarCanvas.width;
+  const h = avatarCanvas.height;
+  const cx = w / 2;
+
+  // 背景
+  avatarCtx.clearRect(0, 0, w, h);
+  // グラデ床
+  const grad = avatarCtx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, '#0d0d2b');
+  grad.addColorStop(1, '#1a1a3e');
+  avatarCtx.fillStyle = grad;
+  avatarCtx.fillRect(0, 0, w, h);
+
+  // 床ライン
+  avatarCtx.strokeStyle = 'rgba(255,230,109,0.15)';
+  avatarCtx.lineWidth = 1;
+  for (let i = 0; i < 5; i++) {
+    const y = h * 0.6 + i * 18;
+    avatarCtx.beginPath();
+    avatarCtx.moveTo(0, y); avatarCtx.lineTo(w, y);
+    avatarCtx.stroke();
+  }
+
+  // バウンス（ゲーム中は体が跳ねる）
+  const bounce = gameRunning ? Math.sin(avatarAnimFrame * 0.12) * 4 : 0;
+
+  // スケール（画面サイズに対して相対的に）
+  const scale = Math.min(w, h) / 220;
+
+  drawRobloxAvatar(avatarCtx, cx, h * 0.55 + bounce, scale);
+}
+
+// ===== ロブロックス風アバター描画 =====
+// MediaPipe導入時：avatarState.leftArmAngle / rightArmAngle をlandmarksで更新するだけ
+function drawRobloxAvatar(ctx, cx, cy, scale) {
+  const s = scale;
+
+  // アームアングルを滑らかに戻す
+  if (!avatarState.leftHit)  avatarState.leftArmAngle  += (-30 - avatarState.leftArmAngle)  * 0.15;
+  if (!avatarState.rightHit) avatarState.rightArmAngle += (-30 - avatarState.rightArmAngle) * 0.15;
+  avatarState.leftHit  = false;
+  avatarState.rightHit = false;
+
+  ctx.save();
+
+  // --- 影 ---
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 72*s, 28*s, 8*s, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  // --- 足（左右） ---
+  drawBlock(ctx, cx - 13*s, cy + 42*s, 22*s, 30*s, '#2563EB', '#1D4ED8', s); // 左足
+  drawBlock(ctx, cx + 3*s,  cy + 42*s, 22*s, 30*s, '#2563EB', '#1D4ED8', s); // 右足
+
+  // --- 胴体 ---
+  drawBlock(ctx, cx - 20*s, cy - 10*s, 40*s, 50*s, '#EF4444', '#DC2626', s);
+  // 胴体の白ストライプ
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  ctx.fillRect(cx - 20*s, cy - 10*s, 40*s, 8*s);
+
+  // --- 腕（左：画面右、右：画面左 ※ミラー表示） ---
+  drawArm(ctx, cx - 22*s, cy - 5*s, avatarState.rightArmAngle, s, avatarState.rightHit);
+  drawArm(ctx, cx + 22*s, cy - 5*s, avatarState.leftArmAngle,  s, avatarState.leftHit, true);
+
+  // --- 頭 ---
+  drawBlock(ctx, cx - 18*s, cy - 52*s, 36*s, 36*s, '#FBBF24', '#F59E0B', s);
+
+  // 目（左）
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(cx - 12*s, cy - 44*s, 8*s, 8*s);
+  // 目（右）
+  ctx.fillRect(cx + 4*s,  cy - 44*s, 8*s, 8*s);
+  // 目の白ハイライト
+  ctx.fillStyle = 'white';
+  ctx.fillRect(cx - 10*s, cy - 43*s, 3*s, 3*s);
+  ctx.fillRect(cx + 6*s,  cy - 43*s, 3*s, 3*s);
+
+  // 口
+  ctx.strokeStyle = '#92400E';
+  ctx.lineWidth = 2*s;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.arc(cx, cy - 33*s, 6*s, 0.1, Math.PI - 0.1);
+  ctx.stroke();
+
+  // ヘルメット風つば
+  ctx.fillStyle = '#F59E0B';
+  ctx.fillRect(cx - 20*s, cy - 52*s, 40*s, 5*s);
+
+  ctx.restore();
+
+  // ヒットエフェクト（腕振り時の星）
+  if (avatarState.leftHit || avatarState.rightHit) {
+    drawHitStar(ctx, avatarState.leftHit  ? cx + 60*s : cx - 60*s, cy - 20*s, s);
+  }
+}
+
+function drawBlock(ctx, x, y, w, h, colorTop, colorSide, s) {
+  // 上面（明るい）
+  ctx.fillStyle = colorTop;
+  ctx.fillRect(x, y, w, h);
+  // 右面（暗い・3D感）
+  ctx.fillStyle = colorSide;
+  ctx.fillRect(x + w, y + 3*s, 4*s, h);
+  // 下面
+  ctx.fillRect(x + 3*s, y + h, w, 4*s);
+  // アウトライン
+  ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(x, y, w, h);
+}
+
+function drawArm(ctx, shoulderX, shoulderY, angleDeg, s, isHit, flip = false) {
+  ctx.save();
+  ctx.translate(shoulderX, shoulderY);
+  const dir = flip ? 1 : -1;
+  ctx.rotate((angleDeg * Math.PI / 180) * dir);
+
+  const color = isHit ? '#FFE66D' : '#FBBF24';
+  const shadow = isHit ? '#F59E0B' : '#D97706';
+  drawBlock(ctx, -8*s, 0, 16*s, 32*s, color, shadow, s);
+
+  // 手（丸い）
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(0, 38*s, 8*s, 0, Math.PI*2);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawHitStar(ctx, x, y, s) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.fillStyle = '#FFE66D';
+  ctx.font = `${20*s}px serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('⭐', 0, 0);
+  ctx.restore();
+}
+
+// ===== カメラ初期化 =====
+async function initCamera() {
+  video = document.getElementById('camera-video');
+  initAvatarCanvas();
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 }, audio: false });
+    video.srcObject = stream;
+    video.onloadedmetadata = () => {
+      startMotionDetection();
+    };
+    useCameraMode = true;
+  } catch (e) {
+    showNoCameraMode();
+  }
+}
+
+function showNoCameraMode() {
+  useCameraMode = false;
+  document.getElementById('no-camera').style.display = 'flex';
+  initAvatarCanvas(); // カメラなしでもアバターは表示
+}
+
+// ===== 動体検出ループ =====
+let motionCanvas = document.createElement('canvas');
+let motionCtx;
+
+function startMotionDetection() {
+  motionCanvas.width  = video.videoWidth;
+  motionCanvas.height = video.videoHeight;
+  motionCtx = motionCanvas.getContext('2d');
+  requestAnimationFrame(detectMotion);
+}
+
+function detectMotion() {
+  requestAnimationFrame(detectMotion);
+  if (!gameRunning) return;
+
+  motionCtx.drawImage(video, 0, 0, motionCanvas.width, motionCanvas.height);
+  const frame = motionCtx.getImageData(0, 0, motionCanvas.width, motionCanvas.height);
+  const data = frame.data;
+  const w = motionCanvas.width;
+  const h = motionCanvas.height;
+  const mid = Math.floor(w / 2);
+
+  if (!prevFrameData) { prevFrameData = data.slice(); return; }
+
+  let sumLeft = 0, sumRight = 0;
+  let countLeft = 0, countRight = 0;
+
+  for (let y = 0; y < h; y += 3) {
+    for (let x = 0; x < w; x += 3) {
+      const i = (y * w + x) * 4;
+      const diff = Math.abs(data[i]   - prevFrameData[i])
+                 + Math.abs(data[i+1] - prevFrameData[i+1])
+                 + Math.abs(data[i+2] - prevFrameData[i+2]);
+      const realX = w - x;
+      if (realX < mid) { sumLeft  += diff; countLeft++; }
+      else             { sumRight += diff; countRight++; }
+    }
+  }
+
+  motionLeft  = sumLeft  / (countLeft  || 1) / 3;
+  motionRight = sumRight / (countRight || 1) / 3;
+
+  document.getElementById('motion-left-bar').style.width  = Math.min(100, motionLeft  * 4) + '%';
+  document.getElementById('motion-right-bar').style.width = Math.min(100, motionRight * 4) + '%';
+
+  const now = performance.now();
+
+  if (motionLeft > MOTION_THRESHOLD && now > hitCooldownLeft) {
+    hitCooldownLeft = now + COOLDOWN_MS;
+    // アバターの腕を上げる（MediaPipe導入時もここを差し替えるだけ）
+    avatarState.leftArmAngle = -110;
+    avatarState.leftHit = true;
+    triggerHit('left');
+  }
+  if (motionRight > MOTION_THRESHOLD && now > hitCooldownRight) {
+    hitCooldownRight = now + COOLDOWN_MS;
+    avatarState.rightArmAngle = -110;
+    avatarState.rightHit = true;
+    triggerHit('right');
+  }
+
+  prevFrameData = data.slice();
+}
+
+// ===== キーボードモード =====
+document.addEventListener('keydown', e => {
+  if (!gameRunning || useCameraMode) return;
+  if (e.key === 'ArrowLeft'  || e.key === 'z' || e.key === 'Z') {
+    avatarState.leftArmAngle = -110; avatarState.leftHit = true;
+    triggerHit('left');
+  }
+  if (e.key === 'ArrowRight' || e.key === 'x' || e.key === 'X') {
+    avatarState.rightArmAngle = -110; avatarState.rightHit = true;
+    triggerHit('right');
+  }
+});
+
+// ===== ヒット判定 =====
+function triggerHit(lane) {
+  if (!gameRunning) return;
+  const now = performance.now() - gameStartTime;
+
+  const laneEl = lane === 'left' ? document.getElementById('lane-left') : document.getElementById('lane-right');
+  const flash = laneEl.querySelector('.lane-flash');
+  const hzone = laneEl.querySelector('.hit-zone');
+
+  // 近いノーツを探す
+  let closest = null;
+  let closestDist = Infinity;
+  for (const note of notes) {
+    if (note.hit || note.missed) continue;
+    if (note.lane !== lane) continue;
+    const noteTime = note.spawnTime + NOTE_FALL_SPEED;
+    const dist = Math.abs(now - noteTime);
+    if (dist < HIT_WINDOW && dist < closestDist) {
+      closest = note;
+      closestDist = dist;
+    }
+  }
+
+  if (closest) {
+    closest.hit = true;
+    closest.el.remove();
+    hitNotes++;
+    combo++;
+    if (combo > maxCombo) maxCombo = combo;
+    const pts = combo >= 10 ? 200 : combo >= 5 ? 150 : 100;
+    score += pts;
+    updateScore();
+    playHitSound(true);
+    showHitEffect(laneEl, combo >= 5 ? '🔥 GREAT!' : '✨ HIT!');
+  } else {
+    combo = 0;
+    updateScore();
+    playHitSound(false);
+    showHitEffect(laneEl, 'MISS', true);
+  }
+
+  // フラッシュ
+  flash.classList.add('show');
+  hzone.classList.add('active');
+  setTimeout(() => { flash.classList.remove('show'); hzone.classList.remove('active'); }, 120);
+}
+
+function showHitEffect(laneEl, text, isMiss = false) {
+  const el = document.createElement('div');
+  el.className = isMiss ? 'miss-effect' : 'hit-effect';
+  el.textContent = text;
+  laneEl.appendChild(el);
+  el.addEventListener('animationend', () => el.remove());
+}
+
+// ===== スコア表示 =====
+function updateScore() {
+  document.getElementById('score-display').textContent = score.toLocaleString();
+  const comboEl = document.getElementById('combo-display');
+  if (combo >= 3) {
+    comboEl.textContent = `${combo} COMBO!`;
+  } else {
+    comboEl.textContent = '';
+  }
+}
+
+// ===== ノーツ生成 =====
+function spawnNote(lane) {
+  const laneEl = lane === 'left'
+    ? document.getElementById('lane-left')
+    : document.getElementById('lane-right');
+
+  const el = document.createElement('div');
+  el.className = `note ${lane}-note`;
+  el.textContent = lane === 'left' ? '👈' : '👉';
+  el.style.animationDuration = NOTE_FALL_SPEED + 'ms';
+  laneEl.appendChild(el);
+
+  const id = noteIdCounter++;
+  const note = { id, lane, spawnTime: performance.now() - gameStartTime, hit: false, missed: false, el };
+  notes.push(note);
+
+  el.addEventListener('animationend', () => {
+    if (!note.hit) {
+      note.missed = true;
+      el.remove();
+    }
+  });
+}
+
+// ===== ゲームループ =====
+let gameLoop;
+let songTimer;
+
+function startGame() {
+  initAudio();
+  initCamera().then(() => {
+    countdown(3, () => {
+      actualStart();
+    });
+  });
+}
+
+function skipCamera() {
+  showNoCameraMode();
+  initAudio();
+  countdown(3, () => {
+    actualStart();
+  });
+}
+
+function countdown(n, cb) {
+  document.getElementById('start-screen').style.display = 'none';
+  const el = document.getElementById('countdown');
+  el.style.display = 'flex';
+
+  const show = (val) => {
+    el.style.animation = 'none';
+    void el.offsetWidth;
+    el.style.animation = 'countPop 0.4s ease-out';
+    el.textContent = val;
+  };
+
+  show(n);
+  let cur = n - 1;
+  const iv = setInterval(() => {
+    if (cur > 0) { show(cur); cur--; }
+    else {
+      show('GO！');
+      setTimeout(() => { el.style.display = 'none'; cb(); }, 500);
+      clearInterval(iv);
+    }
+  }, 800);
+}
+
+function actualStart() {
+  score = 0; combo = 0; maxCombo = 0;
+  hitNotes = 0; totalNotes = 0; noteIdCounter = 0;
+  notes = [];
+  beatmap = generateBeatmap();
+  beatmapIndex = 0;
+  gameRunning = true;
+  gameStartTime = performance.now();
+  prevFrameData = null;
+  updateScore();
+  playBGM();
+
+  // ノーツスポーンループ
+  gameLoop = setInterval(() => {
+    if (!gameRunning) return;
+    const elapsed = performance.now() - gameStartTime;
+    // 先読み：NOTE_FALL_SPEEDだけ早めにspawn
+    while (beatmapIndex < beatmap.length && beatmap[beatmapIndex].time <= elapsed + NOTE_FALL_SPEED) {
+      spawnNote(beatmap[beatmapIndex].lane === 0 ? 'left' : 'right');
+      beatmapIndex++;
+      totalNotes++;
+    }
+
+    // プログレスバー
+    const prog = Math.min(100, elapsed / SONG_DURATION * 100);
+    document.getElementById('progress-bar').style.width = prog + '%';
+
+    if (elapsed >= SONG_DURATION) endGame();
+  }, 50);
+}
+
+function endGame() {
+  gameRunning = false;
+  clearInterval(gameLoop);
+
+  document.getElementById('result-score').textContent = score.toLocaleString();
+  document.getElementById('result-combo').textContent = maxCombo;
+  const acc = totalNotes > 0 ? Math.round(hitNotes / totalNotes * 100) : 0;
+  document.getElementById('result-acc').textContent = acc + '%';
+
+  const rs = document.getElementById('result-screen');
+  rs.style.display = 'flex';
+}
+
+function restartGame() {
+  document.getElementById('result-screen').style.display = 'none';
+  notes.forEach(n => { try { n.el.remove(); } catch(_){} });
+  notes = [];
+  countdown(3, actualStart);
+}
+
+function updateSensitivity(val) {
+  MOTION_THRESHOLD = parseInt(val);
+  document.getElementById('sens-val').textContent = val;
+}
+</script>
+</body>
+</html>
