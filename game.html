@@ -484,6 +484,10 @@
     <div id="sensitivity-section">
       <label>感度 <span id="sens-val">20</span></label>
       <input type="range" id="sensitivity" min="5" max="60" value="20" oninput="updateSensitivity(this.value)">
+      <label style="margin-top:8px">ノーツ速度 <span id="speed-val">2200</span>ms</label>
+      <input type="range" min="800" max="3500" step="100" value="2200" oninput="updateSpeed(this.value)">
+      <label style="margin-top:8px">判定窓 <span id="hw-val">250</span>ms</label>
+      <input type="range" min="80" max="500" step="10" value="250" oninput="updateHitWindow(this.value)">
     </div>
   </div>
 
@@ -492,8 +496,8 @@
 <script>
 // ===== 設定 =====
 const SONG_DURATION = 60000; // 60秒
-const NOTE_FALL_SPEED = 2200; // ms（ノーツが落ちる時間）
-const HIT_WINDOW = 250; // ms（判定窓）
+let NOTE_FALL_SPEED = 2200; // ms（ノーツが落ちる時間）
+let HIT_WINDOW = 250; // ms（判定窓）
 const MISS_WINDOW = 400; // 見逃し判定
 let MOTION_THRESHOLD = 20;
 
@@ -1054,6 +1058,14 @@ function restartGame() {
 function updateSensitivity(val) {
   MOTION_THRESHOLD = parseInt(val);
   document.getElementById('sens-val').textContent = val;
+}
+function updateSpeed(val) {
+  NOTE_FALL_SPEED = parseInt(val);
+  document.getElementById('speed-val').textContent = val;
+}
+function updateHitWindow(val) {
+  HIT_WINDOW = parseInt(val);
+  document.getElementById('hw-val').textContent = val;
 }
 </script>
 </body>

@@ -136,12 +136,39 @@
     padding: 24px;
   }
   #cam-error span { font-size: 3rem; }
+
+  /* ===== 設定パネル ===== */
+  #settings-btn {
+    background: transparent; border: 1px solid #444; color: #aaa;
+    padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 0.8rem;
+  }
+  #settings-btn:hover { background: #1a1a3e; color: white; }
+  #settings-btn.open  { color: #FFE66D; border-color: #FFE66D; }
+  #settings-panel {
+    position: fixed; top: 0; right: 0; width: 262px; height: 100vh;
+    background: #16213e; border-left: 2px solid #2a2a5a; z-index: 300;
+    padding: 16px 14px; overflow-y: auto;
+    transform: translateX(100%); transition: transform 0.2s ease;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  #settings-panel.open { transform: translateX(0); }
+  .sg { display: flex; flex-direction: column; gap: 5px; }
+  .sg-lbl { font-size: 0.75rem; color: #aaa; display: flex; justify-content: space-between; }
+  .sg-lbl b { color: #FFE66D; }
+  .sg input[type=range] { width: 100%; accent-color: #FFE66D; cursor: pointer; }
+  .sg-radios { display: flex; gap: 8px; }
+  .sg-radios label { font-size: 0.75rem; color: #ccc; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  .sg-div { height: 1px; background: #2a2a5a; }
+  .sg-head { font-size: 0.65rem; color: #555; text-transform: uppercase; letter-spacing: 1.5px; }
+  .sg-apply { background: #FFE66D; color: #1a1a2e; border: none; padding: 7px; border-radius: 6px; font-weight: 900; cursor: pointer; font-size: 0.78rem; width: 100%; }
+  .sg-apply:disabled { background: #444; color: #888; cursor: not-allowed; }
 </style>
 </head>
 <body>
 
 <div id="header">
   <h1>🦴 骨格検出デモ（MediaPipe Pose）</h1>
+  <button id="settings-btn" onclick="toggleSettings()">⚙ 設定</button>
   <div id="status">読み込み中...</div>
 </div>
 
@@ -364,6 +391,58 @@ async function startCamera() {
 }
 
 startCamera();
+</script>
+
+<!-- 設定パネル -->
+<div id="settings-panel">
+  <div class="sg-head">MediaPipe</div>
+
+  <div class="sg">
+    <div class="sg-lbl">モデル精度 modelComplexity</div>
+    <div class="sg-radios">
+      <label><input type="radio" name="mp-cx" value="0"> 0 速い</label>
+      <label><input type="radio" name="mp-cx" value="1" checked> 1 標準</label>
+      <label><input type="radio" name="mp-cx" value="2"> 2 精度</label>
+    </div>
+    <button class="sg-apply" id="btn-cx" onclick="applyComplexity()">▶ 適用（モデル再読み込み）</button>
+  </div>
+
+  <div class="sg">
+    <div class="sg-lbl">検出信頼度 minDetection <b id="v-det">0.50</b></div>
+    <input type="range" min="0.1" max="0.9" step="0.05" value="0.5" oninput="onSetting('det',this.value)">
+  </div>
+
+  <div class="sg">
+    <div class="sg-lbl">追跡信頼度 minTracking <b id="v-trk">0.50</b></div>
+    <input type="range" min="0.1" max="0.9" step="0.05" value="0.5" oninput="onSetting('trk',this.value)">
+  </div>
+
+  <div class="sg" style="flex-direction:row;justify-content:space-between;align-items:center">
+    <span style="font-size:0.75rem;color:#aaa">smoothLandmarks</span>
+    <input type="checkbox" checked onchange="onSetting('slm',this.checked)">
+  </div>
+</div>
+
+<script>
+function toggleSettings() {
+  const open = document.getElementById('settings-panel').classList.toggle('open');
+  const btn = document.getElementById('settings-btn');
+  btn.classList.toggle('open', open);
+  btn.textContent = open ? '✕ 閉じる' : '⚙ 設定';
+}
+function onSetting(key, val) {
+  const n = parseFloat(val);
+  if (key === 'det') { document.getElementById('v-det').textContent = n.toFixed(2); pose.setOptions({ minDetectionConfidence: n }); }
+  else if (key === 'trk') { document.getElementById('v-trk').textContent = n.toFixed(2); pose.setOptions({ minTrackingConfidence: n }); }
+  else if (key === 'slm') { pose.setOptions({ smoothLandmarks: val }); }
+}
+function applyComplexity() {
+  const val = parseInt(document.querySelector('input[name="mp-cx"]:checked').value);
+  const btn = document.getElementById('btn-cx');
+  btn.textContent = '読み込み中...'; btn.disabled = true;
+  pose.setOptions({ modelComplexity: val });
+  setTimeout(() => { btn.textContent = '▶ 適用（モデル再読み込み）'; btn.disabled = false; }, 2500);
+}
 </script>
 </body>
 </html>
