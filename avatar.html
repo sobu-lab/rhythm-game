@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>アバターサンプル</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0d0d2b;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    font-family: sans-serif;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  canvas {
+    display: block;
+    touch-action: none;
+  }
+
+  #hint {
+    position: fixed;
+    bottom: 24px;
+    color: rgba(255,255,255,0.4);
+    font-size: 0.85rem;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hint">左半分・右半分をタップ or キー ← →</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+// キャンバスをウィンドウ全体に
+function resize() {
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ===== アバター状態 =====
+// MediaPipe導入時: leftArmAngle / rightArmAngle を骨格データで上書きするだけ
+const av = {
+  leftArmAngle:  -30,  // 度（-90=真上、0=水平）
+  rightArmAngle: -30,
+  leftHit:  false,
+  rightHit: false,
+  leftCooldown:  0,
+  rightCooldown: 0,
+};
+
+let frame = 0;
+
+// ===== 描画メインループ =====
+function loop() {
+  requestAnimationFrame(loop);
+  frame++;
+
+  const w = canvas.width;
+  const h = canvas.height;
+
+  // 背景
+  ctx.clearRect(0, 0, w, h);
+  const bg = ctx.createLinearGradient(0, 0, 0, h);
+  bg.addColorStop(0, '#0d0d2b');
+  bg.addColorStop(1, '#1a1a3e');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, w, h);
+
+  // 床グリッド線
+  ctx.strokeStyle = 'rgba(255,230,109,0.08)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 6; i++) {
+    const y = h * 0.68 + i * 22;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+  }
+
+  // バウンス
+  const bounce = Math.sin(frame * 0.1) * 5;
+  const scale = Math.min(w, h) / 260;
+
+  drawAvatar(w / 2, h * 0.52 + bounce, scale);
+
+  // 腕を自然に戻す
+  av.leftArmAngle  += (-30 - av.leftArmAngle)  * 0.14;
+  av.rightArmAngle += (-30 - av.rightArmAngle) * 0.14;
+
+  // 左右タップゾーン表示（薄く）
+  const now = performance.now();
+  if (now < av.rightCooldown + 300) {
+    ctx.fillStyle = `rgba(255,107,107,${0.08 * (1-(now-av.rightCooldown)/300)})`;
+    ctx.fillRect(0, 0, w/2, h);
+  }
+  if (now < av.leftCooldown + 300) {
+    ctx.fillStyle = `rgba(78,205,196,${0.08 * (1-(now-av.leftCooldown)/300)})`;
+    ctx.fillRect(w/2, 0, w/2, h);
+  }
+
+  // 中央の薄い仕切り線
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([6, 8]);
+  ctx.beginPath(); ctx.moveTo(w/2, 0); ctx.lineTo(w/2, h); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // 左右ラベル
+  ctx.font = `bold ${14 * scale}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,107,107,0.5)';
+  ctx.fillText('左', w * 0.15, h * 0.1);
+  ctx.fillStyle = 'rgba(78,205,196,0.5)';
+  ctx.fillText('右', w * 0.85, h * 0.1);
+}
+
+// ===== ロブロックス風アバター =====
+function drawAvatar(cx, cy, s) {
+  ctx.save();
+
+  // 影
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 74*s, 30*s, 9*s, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  // 足
+  drawBlock(cx - 14*s, cy + 44*s, 23*s, 32*s, '#2563EB', '#1D4ED8', s);
+  drawBlock(cx + 3*s,  cy + 44*s, 23*s, 32*s, '#2563EB', '#1D4ED8', s);
+
+  // 胴体
+  drawBlock(cx - 22*s, cy - 8*s, 44*s, 52*s, '#EF4444', '#DC2626', s);
+  // ロゴ的なストライプ
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  ctx.fillRect(cx - 22*s, cy - 8*s, 44*s, 9*s);
+
+  // 腕（左右）
+  // ※ミラー表示: 画面左=自分の右腕、画面右=自分の左腕
+  drawArm(ctx, cx - 24*s, cy - 3*s, av.rightArmAngle, s, false);
+  drawArm(ctx, cx + 24*s, cy - 3*s, av.leftArmAngle,  s, true);
+
+  // 頭
+  drawBlock(cx - 19*s, cy - 55*s, 38*s, 38*s, '#FBBF24', '#F59E0B', s);
+
+  // 目（左）
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(cx - 13*s, cy - 47*s, 9*s, 9*s);
+  ctx.fillRect(cx + 4*s,  cy - 47*s, 9*s, 9*s);
+  // ハイライト
+  ctx.fillStyle = 'white';
+  ctx.fillRect(cx - 11*s, cy - 46*s, 3*s, 3*s);
+  ctx.fillRect(cx + 6*s,  cy - 46*s, 3*s, 3*s);
+
+  // 口
+  ctx.strokeStyle = '#92400E';
+  ctx.lineWidth = 2.2*s;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.arc(cx, cy - 34*s, 7*s, 0.15, Math.PI - 0.15);
+  ctx.stroke();
+
+  // 帽子つば
+  ctx.fillStyle = '#D97706';
+  ctx.fillRect(cx - 22*s, cy - 56*s, 44*s, 5*s);
+
+  // ヒットエフェクト
+  const now = performance.now();
+  if (now < av.leftCooldown + 400) {
+    const t = 1 - (now - av.leftCooldown) / 400;
+    drawStar(cx + 65*s, cy - 25*s, s, t);
+  }
+  if (now < av.rightCooldown + 400) {
+    const t = 1 - (now - av.rightCooldown) / 400;
+    drawStar(cx - 65*s, cy - 25*s, s, t);
+  }
+
+  ctx.restore();
+}
+
+function drawBlock(x, y, w, h, colorTop, colorSide, s) {
+  ctx.fillStyle = colorTop;
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = colorSide;
+  ctx.fillRect(x + w, y + 3*s, 4*s, h);
+  ctx.fillRect(x + 3*s, y + h, w, 4*s);
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(x, y, w, h);
+}
+
+function drawArm(ctx, shoulderX, shoulderY, angleDeg, s, flip) {
+  ctx.save();
+  ctx.translate(shoulderX, shoulderY);
+  ctx.rotate((angleDeg * Math.PI / 180) * (flip ? 1 : -1));
+  if (flip) ctx.scale(-1, 1); // 左腕は水平ミラーで自然な向きに
+  const hit = flip ? (performance.now() < av.leftCooldown + 300)
+                   : (performance.now() < av.rightCooldown + 300);
+  const col  = hit ? '#FFE66D' : '#FBBF24';
+  const side = hit ? '#F59E0B' : '#D97706';
+  drawBlock(-8*s, 0, 16*s, 32*s, col, side, s);
+  ctx.fillStyle = col;
+  ctx.beginPath();
+  ctx.arc(0, 38*s, 9*s, 0, Math.PI*2);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawStar(x, y, s, t) {
+  ctx.save();
+  ctx.globalAlpha = t;
+  ctx.translate(x, y - (1-t) * 30*s);
+  ctx.font = `${22*s}px serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('⭐', 0, 0);
+  ctx.restore();
+}
+
+// ===== 入力処理 =====
+// MediaPipe導入時: hitLeft() / hitRight() を骨格検出コールバックから呼ぶだけ
+function hitLeft() {
+  av.leftArmAngle = -115;
+  av.leftCooldown = performance.now();
+}
+function hitRight() {
+  av.rightArmAngle = -115;
+  av.rightCooldown = performance.now();
+}
+
+// タップ
+canvas.addEventListener('pointerdown', e => {
+  const x = e.clientX;
+  if (x < canvas.width / 2) hitRight();
+  else hitLeft();
+});
+
+// キーボード
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft'  || e.key === 'z' || e.key === 'Z') hitRight();
+  if (e.key === 'ArrowRight' || e.key === 'x' || e.key === 'X') hitLeft();
+});
+
+loop();
+</script>
+</body>
+</html>
